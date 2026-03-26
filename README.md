@@ -44,7 +44,7 @@
 <dependency>
     <groupId>com.github.cyforkk</groupId>
     <artifactId>cyforkk-redis-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
