@@ -23,9 +23,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * <p>
  * 【四大架构契约】
  * 1. <b>环境安全嗅探 (Environment Sensing)</b>：依托 {@code @ConditionalOnClass}，仅在宿主环境包含 {@code StringRedisTemplate} 字节码时激活，绝不因为强行装配而导致无 Redis 依赖的纯净应用启动崩溃 (Fail-Safe)。
- * 2. <b>开闭原则契约 (Open-Closed Principle)</b>：所有组件强制声明 {@code @ConditionalOnMissingBean}。Starter 提供标准实现，但绝对尊重业务方的主权——允许业务系统通过同名 Bean 进行无损替换与行为重载。
+ * 2. <b>开闭原则契约 (Open-Closed Principle)</b>：所有组件强制声明 {@code @ConditionalOnMissingBean}。Starter 提供标准实现，但绝对尊重业务方的主权——允许业务系统通过同类型 Bean 进行无损替换与行为重载。
  * 3. <b>独立运行沙箱 (Standalone Sandbox)</b>：内置 {@link ObjectMapper} 兜底注册机制，确保在 MQ 消费节点、定时任务等非 Web 宿主环境中，依然具备独立、完整的反序列化自治能力。
- * 4. <b>拓扑依赖编排 (Topology Orchestration)</b>：严格遵循【基础工具 -> 门面服务 -> 业务切面】的自底向上注入顺序，构建无环的依赖注入拓扑图。
+ * 4. <b>命名空间隔离 (Namespace Isolation)</b>：强制采用 `cyforkk` 前缀注册 Bean ID，彻底杜绝与宿主系统（如黑马点评业务线）发生 BeanDefinitionOverrideException 覆写碰撞。
  *
  * @Author cyforkk
  * @Create 2026/3/26
@@ -37,6 +37,7 @@ public class CyforkkRedisAutoConfiguration {
 
     // ========================================================
     // Phase 1: 基础设施层 (Infrastructure Layer)
+    // 强制隔离前缀：cyforkk
     // ========================================================
 
     /**
@@ -46,7 +47,7 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public ObjectMapper objectMapper() {
+    public ObjectMapper cyforkkObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         // 生产级防爆垒：实体类字段被删除或变更时，反序列化主动忽略未知属性，防止引发 JsonMappingException 雪崩
         mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -58,12 +59,13 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public SpelUtil spelUtil(){
+    public SpelUtil cyforkkSpelUtil(){
         return new SpelUtil();
     }
 
     // ========================================================
     // Phase 2: 核心门面层 (Facade Layer)
+    // 强制隔离前缀：cyforkk
     // ========================================================
 
     /**
@@ -73,12 +75,13 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public RedisService redisService(StringRedisTemplate stringRedisTemplate){
+    public RedisService cyforkkRedisService(StringRedisTemplate stringRedisTemplate){
         return new RedisService(stringRedisTemplate);
     }
 
     // ========================================================
     // Phase 3: AOP 护盾切面层 (Aspect Shield Layer)
+    // 强制隔离前缀：cyforkk
     // ========================================================
 
     /**
@@ -87,7 +90,7 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public RedisFaultToleranceAspect redisFaultToleranceAspect(){
+    public RedisFaultToleranceAspect cyforkkRedisFaultToleranceAspect(){
         return new RedisFaultToleranceAspect();
     }
 
@@ -96,8 +99,8 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public CacheAsideAspect cacheAsideAspect(RedisService redisService, SpelUtil spelUtil, ObjectMapper objectMapper) {
-        return new CacheAsideAspect(redisService, spelUtil, objectMapper);
+    public CacheAsideAspect cyforkkCacheAsideAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil, ObjectMapper cyforkkObjectMapper) {
+        return new CacheAsideAspect(cyforkkRedisService, cyforkkSpelUtil, cyforkkObjectMapper);
     }
 
     /**
@@ -105,7 +108,7 @@ public class CyforkkRedisAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public RateLimitAspect rateLimitAspect(RedisService redisService, SpelUtil spelUtil) {
-        return new RateLimitAspect(redisService, spelUtil);
+    public RateLimitAspect cyforkkRateLimitAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
+        return new RateLimitAspect(cyforkkRedisService, cyforkkSpelUtil);
     }
 }
