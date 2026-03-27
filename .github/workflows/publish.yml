@@ -1,0 +1,30 @@
+name: Maven Publish to GitHub Packages
+
+on:
+  push:
+    tags:
+      - 'v1.0.4' # 当你推送以 v 开头的标签（如 v1.0.4）时触发
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # 必须开启写入 Packages 的权限
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17' # 匹配 pom.xml 中的编译版本
+          distribution: 'temurin'
+          server-id: github # 对应 pom.xml 中的 distributionManagement id
+          settings-path: ${{ github.workspace }}
+
+      - name: Build and Publish
+        run: mvn --batch-mode deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用自动生成的令牌
