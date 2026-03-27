@@ -1,5 +1,7 @@
 package com.github.cyforkk.redis.config;
 
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.github.cyforkk.redis.aspect.CacheAsideAspect;
 import com.github.cyforkk.redis.aspect.RateLimitAspect;
 import com.github.cyforkk.redis.aspect.RedisFaultToleranceAspect;
@@ -49,8 +51,15 @@ public class CyforkkRedisAutoConfiguration {
     @ConditionalOnMissingBean
     public ObjectMapper cyforkkObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
-        // 生产级防爆垒：实体类字段被删除或变更时，反序列化主动忽略未知属性，防止引发 JsonMappingException 雪崩
+        // 1. 解决未知属性报错
         mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+        // 2. 【核心修复】注册时间模块以支持 LocalDateTime
+        mapper.registerModule(new JavaTimeModule());
+
+        // 3. 【体验优化】禁止将日期序列化为数字时间戳，返回标准 ISO 格式
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
         return mapper;
     }
 
