@@ -6,7 +6,7 @@
 
     <groupId>com.github.cyforkk</groupId>
     <artifactId>cyforkk-redis-starter</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.4</version>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
