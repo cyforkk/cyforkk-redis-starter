@@ -1,5 +1,6 @@
 package com.github.cyforkk.redis.aspect;
 
+import cn.hutool.core.util.StrUtil;
 import com.github.cyforkk.redis.annotation.RateLimit;
 import com.github.cyforkk.redis.annotation.RateLimits;
 import com.github.cyforkk.redis.exception.RateLimitException;
@@ -153,23 +154,27 @@ public class RateLimitAspect {
 
     /**
      * 高级键名生成路由 (SpEL Expression Engine Router)
+     * <p>
+     * 架构红线：
+     * 1. 若选择 CUSTOM 模式且配置了 SpEL，严格执行 AST 动态解析。
+     * 2. 若选择 CUSTOM 模式但未配置 SpEL，则视为【接口全局限流】（Global Rate Limit），
+     * 严禁通过猜测参数位置来生成 Key，彻底杜绝参数顺序变更引发的全局限流误伤灾难。
      */
     private String generateKey(ProceedingJoinPoint joinPoint, RateLimit rateLimit, Method method) {
         String spEL = rateLimit.key();
-        Object[] args = joinPoint.getArgs();
 
-        // 1. 委派底层的 SpEL 抽象语法树进行变量提取
-        String id = spelUtil.parse(spEL, method, args, joinPoint.getTarget());
-
-        // 2. 解析成功，安全返回
-        if (id != null) {
-            return id;
+        // 1. 【静态全局限流模式】：如果没写表达式，说明开发者的意图是限制这个接口的“总吞吐量”
+        if (StrUtil.isBlank(spEL)) {
+            return "global";
+            // 最终生成的 Redis Key 类似于: rate_limit:custom:UserController.sendSms:global
         }
 
-        // 3. 【防御性兜底】：开发者配置了 CUSTOM 模式但未写表达式，退化为提取首个基础数据类型参数
-        return (args != null && args.length > 0 && args[0] != null && spelUtil.isSimpleType(args[0].getClass()))
-                ? String.valueOf(args[0])
-                : "unknown";
+        Object[] args = joinPoint.getArgs();
+
+        // 2. 【动态精准限流模式】：委派底层的 SpEL 抽象语法树进行变量提取
+        // 依赖注入：SpelUtil 内部已做强校验，若解析为空（比如 #user.id 但 user 为 null），
+        // 会直接抛出 IllegalArgumentException，阻断请求，强制开发者修复空指针。
+        return spelUtil.parse(spEL, method, args, joinPoint.getTarget());
     }
 
     /**

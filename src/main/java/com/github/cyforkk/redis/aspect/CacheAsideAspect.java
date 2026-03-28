@@ -165,29 +165,26 @@ public class CacheAsideAspect {
      * 高级逻辑键名解析引擎 (Key Computation Engine)
      * <p>
      * 架构契约：
-     * 1. 强制前缀隔离：必须配置 {@code keyPrefix} 以防止微服务环境下的 Namespace 碰撞。
-     * 2. 动态求值：支持 SpEL 表达式，允许按用户维度、参数属性生成细粒度缓存键。
-     * 3. 兜底策略：若表达式缺失，则退化为基于方法首个参数的简单提取。
+     * 1. 强制隔离：必须配置 {@code keyPrefix} 以防止微服务环境下的 Namespace 碰撞。
+     * 2. 绝对确定性：严禁通过“猜测参数位置”来生成 Key。开发者若需要动态 Key 必须显式配置 SpEL。
+     * 3. 静态退化：若显式未配置表达式（空串），则视为全局共享静态 Key（如字典表缓存）。
      */
     private String generateKey(ProceedingJoinPoint joinPoint, RedisCache redisCache, Method method) {
         String prefix = redisCache.keyPrefix();
         String spEL = redisCache.key();
+
+        // 1. 静态 Key 场景：如果注解里压根没写 key 表达式，说明开发者本意就是想用一个静态的全局缓存 Key
+        if (StrUtil.isBlank(spEL)) {
+            return prefix;
+        }
+
         Object[] args = joinPoint.getArgs();
 
-        // 1. 调用 AST 编译器进行动态上下文解析
+        // 2. 动态 Key 场景：严格调用 AST 编译器进行动态上下文解析
+        // 依赖注入：SpelUtil 内部已做强校验，若解析为空或失败会直接抛出 IllegalArgumentException
         String id = spelUtil.parse(spEL, method, args, joinPoint.getTarget());
 
-        // 2. 解析判决：如果有动态计算结果，则完成拼接
-        if (id != null) {
-            return prefix + id;
-        }
-
-        // 3. 【防御性兜底】：未配置表达式时，尝试将首个“简单值类型”参数（如 Long id）作为 Key 的后缀。
-        if (args != null && args.length > 0 && args[0] != null && spelUtil.isSimpleType(args[0].getClass())) {
-            return prefix + args[0];
-        }
-
-        // 极端场景（无参数且无表达式）：退化为静态前缀 Key（类级别共享缓存场景）。
-        return prefix;
+        // 3. 拼接并返回绝对确定的物理 Key
+        return prefix + id;
     }
 }
