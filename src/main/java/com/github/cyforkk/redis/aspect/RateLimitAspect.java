@@ -121,13 +121,21 @@ public class RateLimitAspect {
             // ----------------------------------------------------
             long time = rateLimit.time();
             int maxCount = rateLimit.maxCount();
+            Long currentCount = null;
+            try{
+                // 执行原子脚本：传入 Key (KEYS[1]) 和 过期时间 (ARGV[1])
+                currentCount = redisService.execute(
+                        RATE_LIMIT_SCRIPT,
+                        Collections.singletonList(redisKey),
+                        String.valueOf(time)
+                );
+            } catch(Exception e){
+                // 【架构级容错】：限流器底层 Redis 故障，决不能阻塞主业务！
+                // 记录 Error 日志，并直接跳出限流逻辑，对本次请求予以物理放行 (Fail-Open)
+                log.error("[Redis-Starter] 限流器底层 I/O 故障，触发柔性放行！Key: {}, Error: {}", redisKey, e.getMessage());
+                return joinPoint.proceed();
+            }
 
-            // 执行原子脚本：传入 Key (KEYS[1]) 和 过期时间 (ARGV[1])
-            Long currentCount = redisService.execute(
-                    RATE_LIMIT_SCRIPT,
-                    Collections.singletonList(redisKey),
-                    String.valueOf(time)
-            );
 
             // ----------------------------------------------------
             // Step 3: 判决执行与快速失败 (Fail-Fast)

@@ -16,6 +16,7 @@ import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -58,7 +59,8 @@ public class RedisFaultToleranceAspect {
      * 架构考量：使用 volatile 建立内存可见性屏障，确保所有线程实时感知跳闸时间
      */
     private volatile long lastErrorTime = 0L;
-
+    // 【新增】：探针互斥锁，保障半开状态下只有一个线程能去探测后端
+    private final AtomicBoolean isProbing = new AtomicBoolean(false);
     /**
      * 物理拦截探针：精确锚定本 Starter 内部暴露的 Redis 门面服务类
      */
@@ -81,10 +83,34 @@ public class RedisFaultToleranceAspect {
         // Phase 1: 状态机探测 (State Evaluation) - 处于 Open (开启) 状态
         // ==========================================
         // 如果错误次数达标，且距离上次错误发生还在冷却期内，直接拦截，拒绝向下游发送 I/O 请求
-        if (errorCount.intValue() >= ERROR_THRESHOLD && (currentTime - lastErrorTime) < BREAK_WINDOW) {
-            log.warn("Redis 熔断器开启中，请求直接拦截。已冷却：{}ms", currentTime - lastErrorTime);
-            // 熔断期间，拦截所有请求进入降级路由 (传入 null 表示当前无新异常，纯粹被熔断拦截)
-            return handleFallback(joinPoint, null);
+
+        if (errorCount.intValue() >= ERROR_THRESHOLD) {
+            if ((currentTime - lastErrorTime) < BREAK_WINDOW) {
+                // 1. 冷却期内 (Open状态)：全量拦截
+                return handleFallback(joinPoint, null);
+            } else {
+                // 2. 冷却期结束 (Half-Open状态)：尝试获取唯一的探针执行权 (CAS操作无锁化)
+                if (isProbing.compareAndSet(false, true)) {
+                    try {
+                        log.info("Redis 熔断器进入半开状态，发送单点探针试探...");
+                        Object result = joinPoint.proceed();
+                        // 探针试探成功，彻底重置熔断器 (Closed)
+                        errorCount.reset();
+                        log.info("Redis 探针试探成功，熔断器彻底闭合！");
+                        return result;
+                    } catch (Throwable t) {
+                        // 探针试探失败，更新时间戳，继续熔断 (Open)
+                        lastErrorTime = System.currentTimeMillis();
+                        throw t;
+                    } finally {
+                        // 无论探针成功与否，必须释放探针锁
+                        isProbing.set(false);
+                    }
+                } else {
+                    // 3. 没有抢到探针权的并发请求，继续走降级拦截逻辑，绝不给 Redis 增加压力
+                    return handleFallback(joinPoint, null);
+                }
+            }
         }
 
         try {

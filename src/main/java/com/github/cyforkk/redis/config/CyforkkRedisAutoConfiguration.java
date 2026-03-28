@@ -4,12 +4,14 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.github.cyforkk.redis.aspect.CacheAsideAspect;
 import com.github.cyforkk.redis.aspect.RateLimitAspect;
+import com.github.cyforkk.redis.aspect.RedisEvictAspect;
 import com.github.cyforkk.redis.aspect.RedisFaultToleranceAspect;
 import com.github.cyforkk.redis.service.RedisService;
 import com.github.cyforkk.redis.util.SpelUtil;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -35,6 +37,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  */
 @AutoConfiguration
 @ConditionalOnClass(StringRedisTemplate.class)
+// 【核心修复】：强制要求在 Spring 原生的 Redis 自动装配完成后，再加载本组件！
+@AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 public class CyforkkRedisAutoConfiguration {
 
     // ========================================================
@@ -128,5 +132,15 @@ public class CyforkkRedisAutoConfiguration {
     @ConditionalOnMissingBean
     public RateLimitAspect cyforkkRateLimitAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
         return new RateLimitAspect(cyforkkRedisService, cyforkkSpelUtil);
+    }
+
+    /**
+     * 【分布式缓存清理切面装配】
+     * 架构语义：实现 Cache-Aside 模式的自动清理闭环
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RedisEvictAspect cyforkkRedisEvictAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
+        return new RedisEvictAspect(cyforkkRedisService, cyforkkSpelUtil);
     }
 }

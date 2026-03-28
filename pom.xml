@@ -6,7 +6,7 @@
 
     <groupId>com.github.cyforkk</groupId>
     <artifactId>cyforkk-redis-starter</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -27,13 +27,7 @@
         </dependencies>
     </dependencyManagement>
 
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/cyforkk/cyforkk-redis-starter</url>
-        </repository>
-    </distributionManagement>
+
 
     <dependencies>
         <dependency>
