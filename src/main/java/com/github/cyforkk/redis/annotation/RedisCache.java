@@ -45,7 +45,8 @@ public @interface RedisCache {
      * <li>提取简单参数：{@code @RedisCache(keyPrefix = "user:", key = "#id")}</li>
      * <li>提取对象属性：{@code @RedisCache(keyPrefix = "user:", key = "#req.userId")}</li>
      * </ul>
-     * 安全兜底：若未提供该表达式，底层引擎将自动提取方法签名中的第一个基础数据类型参数作为动态后缀。
+     * <b>架构契约：</b>若未提供该表达式（空串），底层引擎将退化为【静态全局缓存】，
+     * 直接使用 keyPrefix 作为完整的 Redis Key。严禁框架瞎猜参数！
      *
      * @return SpEL 表达式字符串
      */
@@ -69,4 +70,8 @@ public @interface RedisCache {
      * @return 时间单位，默认为分钟 (MINUTES)
      */
     TimeUnit unit() default TimeUnit.MINUTES;
+
+    // 随机抖动范围（默认 0，表示不抖动）
+    // 如果设置为 10，则实际过期时间会在 ttl 基础上随机增减 0~10 的值
+    int jitter() default 0;
 }
