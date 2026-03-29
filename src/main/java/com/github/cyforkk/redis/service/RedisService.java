@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.cyforkk.redis.annotation.NoFallback;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.List;
@@ -39,6 +40,11 @@ public class RedisService {
     /** 序列化引擎：由 Starter 统一装配，确保全局时间格式与配置策略（如忽略未知属性）的百分之百对齐 */
     private final ObjectMapper objectMapper;
 
+    // 基础设施：安全的分布式锁释放脚本 (查值+比对+删除 的原子操作)
+    private static final RedisScript<Long> SAFE_DELETE_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            Long.class
+    );
     /**
      * 架构级构造器注入
      * 由外部的 {@code CyforkkRedisAutoConfiguration} 在 SPI 装配时动态推入实例。
@@ -176,10 +182,20 @@ public class RedisService {
 
     /**
      * 缓存驱逐接口
+     * 阻断契约：删除失败可能导致极其严重的脏数据，宕机时直接上抛异常，拒绝降级返回 false！
      * @return true=清除成功
      */
+    @NoFallback // 【核心修复】：禁止熔断器吞咽此方法的异常
     public Boolean delete(String key){
         return stringRedisTemplate.delete(key);
+    }
+
+    /**
+     * 【安全释放】仅当 Redis 中的 Value 与传入的 expectValue 相等时，才执行删除。
+     */
+    @NoFallback
+    public void safeDelete(String key, String expectValue) {
+        stringRedisTemplate.execute(SAFE_DELETE_SCRIPT, java.util.Collections.singletonList(key), expectValue);
     }
 
     // ========================================================

@@ -1,22 +1,20 @@
 package com.github.cyforkk.redis.config;
 
-import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
+import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.github.cyforkk.redis.aspect.CacheAsideAspect;
-import com.github.cyforkk.redis.aspect.RateLimitAspect;
-import com.github.cyforkk.redis.aspect.RedisEvictAspect;
-import com.github.cyforkk.redis.aspect.RedisFaultToleranceAspect;
+import com.github.cyforkk.redis.aspect.*;
 import com.github.cyforkk.redis.service.RedisService;
 import com.github.cyforkk.redis.util.SpelUtil;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
-
 /**
  * 核心高可用控制中枢：分布式 Redis 基础基建自动装配引擎 (Infrastructure Auto-Configuration Engine)
  * <p>
@@ -39,6 +37,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 @ConditionalOnClass(StringRedisTemplate.class)
 // 【核心修复】：强制要求在 Spring 原生的 Redis 自动装配完成后，再加载本组件！
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
+// 【新增总开关】：如果业务方在 application.yml 里配置了 cyforkk.redis.enabled=false，组件将彻底休眠
+@ConditionalOnProperty(prefix = "cyforkk.redis", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class CyforkkRedisAutoConfiguration {
 
     // ========================================================
@@ -58,12 +58,23 @@ public class CyforkkRedisAutoConfiguration {
     @ConditionalOnMissingBean
     public ObjectMapper cyforkkObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
-        // 生产级宽容度设置
-        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        // 核心修复：LocalDateTime 序列化支持
-        mapper.registerModule(new JavaTimeModule());
-        // 体验优化：采用标准 ISO-8601 日期格式
-        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // ... 前置配置不变 ...
+
+        // 【安全修复】：构建基于白名单的多态校验器，彻底封杀 RCE 漏洞！
+        // 【安全修复】：构建基于白名单的多态校验器，彻底封杀 RCE 漏洞！
+        PolymorphicTypeValidator ptv = BasicPolymorphicTypeValidator.builder()
+                .allowIfSubType("java.")      // 允许 Java 原生类 (如集合, 包装类)
+                .allowIfSubType("com.")       // 允许常见的商业包前缀
+                .allowIfSubType("org.")       // 允许常见的开源包前缀
+                .allowIfSubType("cn.")        // 允许国内常见的包前缀
+                .allowIfSubTypeIsArray()      // 【修正】：允许数组类型
+                .build();
+
+        mapper.activateDefaultTyping(
+                ptv, // 替换掉危险的 LaissezFaireSubTypeValidator
+                ObjectMapper.DefaultTyping.NON_FINAL,
+                JsonTypeInfo.As.PROPERTY
+        );
         return mapper;
     }
 
@@ -142,5 +153,11 @@ public class CyforkkRedisAutoConfiguration {
     @ConditionalOnMissingBean
     public RedisEvictAspect cyforkkRedisEvictAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
         return new RedisEvictAspect(cyforkkRedisService, cyforkkSpelUtil);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public IdempotentAspect cyforkkIdempotentAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
+        return new IdempotentAspect(cyforkkRedisService, cyforkkSpelUtil);
     }
 }

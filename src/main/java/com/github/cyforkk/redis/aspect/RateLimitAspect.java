@@ -20,8 +20,9 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.lang.reflect.Method;
-import java.util.Collections;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 核心高可用控制切面：分布式原子限流引擎 (Distributed Atomic Rate Limiting Engine)
@@ -51,7 +52,9 @@ public class RateLimitAspect {
         this.redisService = redisService;
         this.spelUtil = spelUtil;
     }
-
+    // 【架构增强】：方法级限流规则缓存 (L1 Cache)
+    // 作用：消除高并发下每次请求带来的反射读取与动态排序开销
+    private final Map<Method, List<RateLimit>> rateLimitRuleCache = new ConcurrentHashMap<>();
     // ========================================================
     // 基础设施：Lua 预编译原子脚本 (保障 increment 和 expire 的绝对同步)
     // ========================================================
@@ -63,6 +66,10 @@ public class RateLimitAspect {
                 "local count = redis.call('incr', KEYS[1]) \n" +
                         "if tonumber(count) == 1 then \n" +
                         "    redis.call('expire', KEYS[1], ARGV[1]) \n" +
+                        "else \n" +
+                        "    if redis.call('ttl', KEYS[1]) == -1 then \n" +  // 【防御增强】：检测永生键
+                        "        redis.call('expire', KEYS[1], ARGV[1]) \n" +
+                        "    end \n" +
                         "end \n" +
                         "return count"
         );
@@ -78,86 +85,73 @@ public class RateLimitAspect {
      */
     @Around("@annotation(com.github.cyforkk.redis.annotation.RateLimit) || @annotation(com.github.cyforkk.redis.annotation.RateLimits)")
     public Object checkLimit(ProceedingJoinPoint joinPoint) throws Throwable {
-        // ==========================================
-        // Phase 1: 代理穿透与空间隔离坐标提取
-        // ==========================================
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
-
-        // 穿透 Spring 代理层，拿到最底层的真实方法，防止 SpEL 解析不到真实的参数名
         Method specificMethod = ClassUtils.getMostSpecificMethod(method, joinPoint.getTarget().getClass());
 
-        // 提取【类名.方法名】构建物理隔离命名空间，防止不同类的同名方法发生限流桶碰撞
-        String className = specificMethod.getDeclaringClass().getSimpleName();
-        String methodName = specificMethod.getName();
-        String methodPath = className + "." + methodName;
-
-        String redisKey;
-        String basePrefix = "rate_limit:";
-
-        // 提取当前方法上的所有限流契约（兼容单一和复合 @Repeatable 注解）
-        Set<RateLimit> rateLimitSet = AnnotatedElementUtils.getMergedRepeatableAnnotations(specificMethod, RateLimit.class, RateLimits.class);
+        // ==========================================
+        // Phase 1: 获取并排序多维限流规则 (命中 O(1) 缓存)
+        // ==========================================
+        List<RateLimit> sortedLimits = rateLimitRuleCache.computeIfAbsent(
+                specificMethod,
+                this::parseAndSortRateLimits
+        );
 
         // ==========================================
-        // Phase 2: 遍历多维规则，执行漏斗过滤
+        // Phase 2: 严格按照短周期优先顺序，执行漏斗校验
         // ==========================================
-        for (RateLimit rateLimit : rateLimitSet) {
+        for (RateLimit rateLimit : sortedLimits) {
+            String redisKey = generateKey(joinPoint, rateLimit, specificMethod);
 
-            // ----------------------------------------------------
-            // Step 1: 智能路由构建限流 Key
-            // ----------------------------------------------------
-            if (rateLimit.type() == RateLimit.LimitType.IP) {
-                // 【IP 防刷模式】：获取客户端绝对真实 IP
-                String ip = getIpAddress();
-                redisKey = basePrefix + "ip:" + methodPath + ":" + ip;
-            } else {
-                // 【业务动态模式】：委派 SpEL 引擎解析业务参数
-                String dynamicSuffix = generateKey(joinPoint, rateLimit, specificMethod);
-                redisKey = basePrefix + "custom:" + methodPath + ":" + dynamicSuffix;
-            }
-
-            // ----------------------------------------------------
-            // Step 2: 发送 Lua 脚本进行原子查账与计步
-            // ----------------------------------------------------
-            long time = rateLimit.time();
-            int maxCount = rateLimit.maxCount();
-            Long currentCount = null;
-            try{
-                // 执行原子脚本：传入 Key (KEYS[1]) 和 过期时间 (ARGV[1])
-                currentCount = redisService.execute(
+            try {
+                // 执行 Lua 原子脚本
+                Long currentCount = redisService.execute(
                         RATE_LIMIT_SCRIPT,
                         Collections.singletonList(redisKey),
-                        String.valueOf(time)
+                        String.valueOf(rateLimit.time()),
+                        String.valueOf(rateLimit.maxCount())
                 );
-            } catch(Exception e){
-                // 【架构级容错】：限流器底层 Redis 故障，决不能阻塞主业务！
-                // 记录 Error 日志，并直接跳出限流逻辑，对本次请求予以物理放行 (Fail-Open)
-                log.error("[Redis-Starter] 限流器底层 I/O 故障，触发柔性放行！Key: {}, Error: {}", redisKey, e.getMessage());
-                return joinPoint.proceed();
-            }
 
-
-            // ----------------------------------------------------
-            // Step 3: 判决执行与快速失败 (Fail-Fast)
-            // ----------------------------------------------------
-            if (currentCount != null && currentCount > rateLimit.maxCount()) {
-                log.warn("触发限流警告！拦截键: {}, 规则阈值: {}次/{}秒", redisKey, rateLimit.maxCount(), rateLimit.time());
-
-                // 获取注解上定义的提示语
-                String msg = rateLimit.message();
-                // 如果是默认值且是 IP 限流，可以自动切换更专业的术语
-                if ("请求过于频繁，请稍后再试".equals(msg) && rateLimit.type() == RateLimit.LimitType.IP) {
-                    msg = "您的网络环境异常，请稍后再试";
+                if (currentCount != null && currentCount > rateLimit.maxCount()) {
+                    // 触发拦截，由于已经按照时间排过序，
+                    // 此时抛出异常，最大程度保护了后续的长周期（大容量）令牌桶不被恶意请求污染！
+                    log.warn("触发多维限流防线！拦截键: {}, 阈值: {}次/{}秒",
+                            redisKey, rateLimit.maxCount(), rateLimit.time());
+                    throw new RateLimitException(rateLimit.message());
                 }
-
-                throw new RateLimitException(msg);
+            } catch (Exception e) {
+                // 如果是 Lua 脚本执行时的 Redis I/O 异常，且没有 @NoFallback，触发降级放行...
+                if (e instanceof RateLimitException) {
+                    throw e; // 业务限流阻断，正常抛出
+                }
+                log.error("[Redis-Starter] 限流组件底层故障，触发柔性放行！Key: {}", redisKey, e);
             }
         }
 
-        // ==========================================
-        // Phase 3: 漏斗全量通过，物理放行
-        // ==========================================
         return joinPoint.proceed();
+    }
+
+    /**
+     * 内部引擎：提取目标方法上的所有限流契约，并执行架构级排序
+     */
+    private List<RateLimit> parseAndSortRateLimits(Method method) {
+        List<RateLimit> limits = new ArrayList<>();
+
+        // 1. 提取单注解与多重注解
+        if (method.isAnnotationPresent(RateLimits.class)) {
+            limits.addAll(Arrays.asList(method.getAnnotation(RateLimits.class).value()));
+        } else if (method.isAnnotationPresent(RateLimit.class)) {
+            limits.add(method.getAnnotation(RateLimit.class));
+        }
+
+        // 2. 【核心防御设计】：按时间窗口 (time) 升序排序
+        // 确保短周期（如 1秒5次）优先于长周期（如 1天1000次）执行。
+        // 如果时间相同，则按阈值 (maxCount) 升序排序，严格的优先。
+        return limits.stream()
+                .sorted(Comparator
+                        .comparingLong(RateLimit::time)
+                        .thenComparingInt(RateLimit::maxCount))
+                .collect(Collectors.toList());
     }
 
     /**
@@ -169,20 +163,20 @@ public class RateLimitAspect {
      * 严禁通过猜测参数位置来生成 Key，彻底杜绝参数顺序变更引发的全局限流误伤灾难。
      */
     private String generateKey(ProceedingJoinPoint joinPoint, RateLimit rateLimit, Method method) {
-        String spEL = rateLimit.key();
+        String namespace = method.getDeclaringClass().getSimpleName() + ":" + method.getName() + ":";
+        // 核心修复：强制追加时间窗口构建绝对隔离的物理桶
+        String ruleSuffix = ":" + rateLimit.time();
 
-        // 1. 【静态全局限流模式】：如果没写表达式，说明开发者的意图是限制这个接口的“总吞吐量”
-        if (StrUtil.isBlank(spEL)) {
-            return "global";
-            // 最终生成的 Redis Key 类似于: rate_limit:custom:UserController.sendSms:global
+        if (rateLimit.type() == RateLimit.LimitType.IP) {
+            return namespace + "ip:" + getIpAddress() + ruleSuffix;
         }
 
-        Object[] args = joinPoint.getArgs();
+        String spEL = rateLimit.key();
+        if (StrUtil.isBlank(spEL)) {
+            return namespace + "global" + ruleSuffix;
+        }
 
-        // 2. 【动态精准限流模式】：委派底层的 SpEL 抽象语法树进行变量提取
-        // 依赖注入：SpelUtil 内部已做强校验，若解析为空（比如 #user.id 但 user 为 null），
-        // 会直接抛出 IllegalArgumentException，阻断请求，强制开发者修复空指针。
-        return spelUtil.parse(spEL, method, args, joinPoint.getTarget());
+        return namespace + spelUtil.parse(spEL, method, joinPoint.getArgs(), joinPoint.getTarget()) + ruleSuffix;
     }
 
     /**

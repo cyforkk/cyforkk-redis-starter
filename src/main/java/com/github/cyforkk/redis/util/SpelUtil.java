@@ -78,6 +78,23 @@ public class SpelUtil {
         return result;
     }
 
+    public String parse(String spEL, Method method, Object[] args, Object target, Object result) {
+        if (StrUtil.isBlank(spEL)) return null;
+        Expression expression = expressionCache.computeIfAbsent(spEL, parser::parseExpression);
+        MethodBasedEvaluationContext context = new MethodBasedEvaluationContext(target, method, args, discoverer);
+
+        // 核心修复：将返回值注入 SpEL 变量沙箱
+        if (result != null) {
+            context.setVariable("result", result);
+        }
+
+        String evalResult = expression.getValue(context, String.class);
+        if (evalResult == null) {
+            throw new IllegalArgumentException("SpEL解析结果为空");
+        }
+        return evalResult;
+    }
+
     /**
      * 类型安全探针：判断目标 Class 是否为简单的基础/包装值类型
      * <p>

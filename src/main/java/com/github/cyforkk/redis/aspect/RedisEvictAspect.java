@@ -9,18 +9,12 @@ import org.aspectj.lang.annotation.AfterReturning;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.util.ClassUtils;
-
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.lang.reflect.Method;
 
 /**
  * 分布式缓存清理切面 (基于 Cache-Aside 模式)
- * <p>
- * 架构约束：
- * 1. 触发时机：严格绑定在目标方法成功返回后（@AfterReturning）。若主方法抛出异常（如 DB 更新失败），切面不执行，保障强一致性。
- * 2. 隔离原则：缓存层的任何网络、解析、执行异常，必须在此切面内被吞咽（Swallow），绝对不允许向上层抛出而污染主业务线的正常返回。
- *
- * @Author cyforkk
- * @Version 2.0 (Architectural Refactored)
  */
 @Aspect
 @Slf4j
@@ -36,23 +30,19 @@ public class RedisEvictAspect {
 
     /**
      * 执行缓存清理后置动作
-     * * @param joinPoint  AOP 连接点 (此处绝对不能使用 ProceedingJoinPoint)
-     * @param redisEvict 拦截到的缓存清除注解
+     * 【核心修复 1】：绑定 returning 属性，拦截目标方法的返回值，赋值给 result 参数
      */
-    @AfterReturning(pointcut = "@annotation(redisEvict)")
-    public void evictCache(JoinPoint joinPoint, RedisEvict redisEvict) {
+    @AfterReturning(pointcut = "@annotation(redisEvict)", returning = "result")
+    public void evictCache(JoinPoint joinPoint, RedisEvict redisEvict, Object result) {
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
-        // 获取实际执行类的具体方法（防御代理类或接口继承导致的反射失效）
         Method specificMethod = ClassUtils.getMostSpecificMethod(method, joinPoint.getTarget().getClass());
 
         String key;
         try {
-            // 阶段一：AST 语法树解析与动态 Key 生成
-            key = generateKey(joinPoint, redisEvict, specificMethod);
+            // 【核心修复 2】：将抓取到的 result 透传给底层 Key 生成器
+            key = generateKey(joinPoint, redisEvict, specificMethod, result);
         } catch (Exception e) {
-            // 【架构级容错】：SpEL 解析可能因参数上下文缺失而抛出异常。
-            // 此时主业务(DB操作)已成功，必须记录告警并立即终止切面，绝不可抛出异常导致外层 HTTP 请求失败。
             log.error("[Redis-Starter] 缓存清理失败：Key 动态解析异常. Method: {}, Error: {}",
                     specificMethod.getName(), e.getMessage());
             return;
@@ -60,36 +50,46 @@ public class RedisEvictAspect {
 
         // 阶段二：执行物理删除 (高危 I/O 操作隔离)
         try {
-            Boolean deleted = redisService.delete(key);
-            log.info("[Redis-Starter] 缓存清理完成. Key: {}, 命中状态: {}", key, deleted);
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        try {
+                            Boolean deleted = redisService.delete(key);
+                            log.info("[Redis-Starter] (事务提交后) 缓存清理完成. Key: {}, 命中状态: {}", key, deleted);
+                        } catch (Exception e) {
+                            log.error("[Redis-Starter] (事务提交后) 缓存清理发生网络异常，可能产生脏数据！Key: {}", key, e);
+                        }
+                    }
+                });
+                log.info("[Redis-Starter] 探测到事务环境，已将缓存清理任务挂载至事务 Commit 之后执行. Key: {}", key);
+            } else {
+                Boolean deleted = redisService.delete(key);
+                log.info("[Redis-Starter] 缓存清理完成. Key: {}, 命中状态: {}", key, deleted);
+            }
         } catch (Exception e) {
-            // 【架构级容错】：网络抖动或 Redis 宕机会导致此步骤崩溃。
-            // 必须隔离异常！此处记录 ERROR 日志。在更高等级的金融架构中，此处应将 Key 压入 MQ 或本地延迟队列进行补偿重试。
-            log.error("[Redis-Starter] 缓存清理失败：Redis I/O 异常. 警告：可能产生脏数据！Key: {}, Error: {}",
-                    key, e.getMessage());
+            log.error("[Redis-Starter] 缓存清理注册失败：可能产生脏数据！Key: {}, Error: {}", key, e.getMessage());
         }
     }
 
     /**
      * 物理键名生成路由
-     * 架构约束：拒绝不确定的魔法猜测，解析失败应当暴露给上层 catch，而不是错误地删除其他 Key。
+     * 【核心修复 3】：方法签名增加 Object result 参数
      */
-    private String generateKey(JoinPoint joinPoint, RedisEvict redisEvict, Method method) {
+    private String generateKey(JoinPoint joinPoint, RedisEvict redisEvict, Method method, Object result) {
         String prefix = redisEvict.keyPrefix();
         String spEL = redisEvict.key();
         Object[] args = joinPoint.getArgs();
 
-        // 1. 如果未配置 SpEL 表达式，直接抛出异常（或者视业务规则只返回 Prefix 作为全局共享 Key）
         if (spEL == null || spEL.trim().isEmpty()) {
             log.warn("[Redis-Starter] @RedisEvict 缺少 key 表达式，将退化为静态全局 Key: {}", prefix);
             return prefix;
         }
 
-        // 2. 严格调用 SpEL 引擎解析
-        String id = spelUtil.parse(spEL, method, args, joinPoint.getTarget());
+        // 【核心修复 4】：将 result 最终递交给 SpEL 解析引擎
+        String id = spelUtil.parse(spEL, method, args, joinPoint.getTarget(), result);
 
         if (id == null || id.trim().isEmpty()) {
-            // 拒绝执行危险的“默认取第一个参数”的猜测逻辑，直接抛出异常交由外层容错处理
             throw new IllegalArgumentException("SpEL 解析结果为空，拒绝生成危险的 Cache Key");
         }
 

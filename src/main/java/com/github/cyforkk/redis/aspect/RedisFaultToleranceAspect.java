@@ -1,5 +1,6 @@
 package com.github.cyforkk.redis.aspect;
 
+import org.springframework.dao.DataAccessException;
 import com.github.cyforkk.redis.annotation.NoFallback;
 import com.github.cyforkk.redis.util.DefaultValueUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -101,7 +102,13 @@ public class RedisFaultToleranceAspect {
                     } catch (Throwable t) {
                         // 探针试探失败，更新时间戳，继续熔断 (Open)
                         lastErrorTime = System.currentTimeMillis();
-                        throw t;
+
+                        // 【核心修复】：绝对不能直接抛出异常！保护探路者，让它也平滑降级
+                        if (t instanceof DataAccessException) {
+                            log.warn("Redis 探针试探失败，继续保持熔断状态...");
+                            return handleFallback(joinPoint, t);
+                        }
+                        throw t; // 如果是代码 Bug (如 NullPointerException)，照常抛出
                     } finally {
                         // 无论探针成功与否，必须释放探针锁
                         isProbing.set(false);
@@ -132,7 +139,7 @@ public class RedisFaultToleranceAspect {
             // ==========================================
 
             // 场景 A：真实的物理/网络层级宕机
-            if (throwable instanceof RedisConnectionFailureException || throwable instanceof QueryTimeoutException) {
+            if (throwable instanceof DataAccessException) {
                 errorCount.increment();
                 lastErrorTime = System.currentTimeMillis();
                 log.error("Redis 物理连接或超时故障，当前连续错误计数：{}", errorCount.intValue());
