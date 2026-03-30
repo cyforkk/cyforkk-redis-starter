@@ -1,135 +1,174 @@
-# 🚀 cyforkk-redis-starter
+# cyforkk-redis-starter
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-2.x%20%7C%203.x-brightgreen.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+`cyforkk-redis-starter` 是一款基于大厂基础架构标准打造的工业级高可用 Redis 分布式组件。
 
-`cyforkk-redis-starter` 是一款基于大厂基础架构（Infra）标准打造的**工业级高可用 Redis 分布式组件**。
+在微服务架构中，单纯的读写 Redis 很容易遇到各种“深水区”问题：比如高并发下的缓存击穿、用户手抖导致的重复提交、恶意脚本的疯狂刷量，甚至 Redis 突然宕机导致整个系统雪崩。
 
-它不仅提供了开箱即用的缓存、防抖、限流能力，更在微服务架构的“深水区”（如高并发击穿、分布式竞态条件、网络物理宕机、序列化安全等）构建了严密的防御纵深，致力于在极端复杂的生产环境下保障主核心业务的绝对稳定。
+本组件将这些复杂的分布式防御逻辑进行了统一封装。你只需要在代码上加几个简单的注解，就能立刻为你的业务系统建立起一道坚不可摧的流量防线。
 
-## ✨ 核心架构特性 (Core Features)
+## 核心能力通俗解析
 
-- 🛡️ **Fail-Open 柔性降级与刚性阻断**：底层 AOP 自动吞咽 `DataAccessException`，Redis 宕机时自动降级放行（防基础类型拆箱 NPE）。配合 `@NoFallback` 提供高危操作的刚性阻断。
-- 🚄 **千万级并发缓存防击穿**：采用 Caffeine 本地缓存弱引用锁池 (`weakValues`) 配合 `ReentrantLock` 构成 DCL 双重检查锁，根除缓存击穿与内存泄漏。
-- 🔄 **MVCC 事务感知缓存一致性**：自动探测 Spring 事务，将 `@RedisEvict` 清理动作延迟挂载至事务 `afterCommit` 之后执行，杜绝并发幻读与脏缓存。
-- 🔒 **防抖锁防劫持体系**：利用 `UUID` 护城河标记与 `Lua` 脚本验明正身，彻底解决高并发超时场景下的锁误删与劫持灾难。
-- 🚦 **多维漏斗限流引擎**：支持 `@RateLimits` 叠加防刷。内置基于本地方法级缓存（L1 Cache）的时间窗口排序算法，彻底消除多维规则下的“脏累加”跨界污染。
-- 🛡️ **Jackson 泛型防御 (RCE 免疫)**：基于 `BasicPolymorphicTypeValidator` 白名单机制开启全局多态类型保留，既解决了泛型擦除导致的 `ClassCastException`，又彻底封杀了反序列化 RCE 提权漏洞。
+- **柔性降级（不怕宕机）**：如果 Redis 突然挂了，系统不会跟着崩溃。组件会自动“吞掉”报错，让请求直接去查数据库，保证核心业务（如用户下单）依然可用。
+- **防缓存击穿**：当某个热点数据突然过期，如果有 1 万个人同时来查，组件会在内部排队上锁，只放 1 个请求去查数据库并写回 Redis，保护数据库不被瞬间压垮。
+- **强一致性保障**：在修改数据时，组件会自动感知 Spring 的数据库事务。只有当数据库真正提交成功后，才会去删除旧缓存，彻底杜绝“脏数据”。
+- **防抖与接口幂等**：用户因为网络卡顿疯狂点击“提交”按钮时，组件能在极短时间内精准识别并拦截多余的请求，防止生成重复的订单。
+- **多维漏斗限流**：你可以组合配置限流规则。比如：针对单个接口，同一个 IP 10 秒内最多访问 3 次，同时同一个手机号 1 天内最多发送 10 次验证码。
+- **开箱即用的开发者体验**：自带默认的全局异常兜底处理器，拦截恶意请求后直接返回规范的 HTTP 429 提示，避免页面出现难看的 500 报错堆栈。
 
-## 📦 快速开始 (Quick Start)
+------
+
+## 快速开始
 
 ### 1. 引入依赖
-在项目的 `pom.xml` 中引入组件（需先执行 `mvn clean install` 安装到本地或私服）：
 
-```xml
+将代码拉取到本地并执行 `mvn clean install` 后，在你的 Spring Boot 业务项目中引入依赖：
+
+```XML
 <dependency>
     <groupId>com.github.cyforkk</groupId>
     <artifactId>cyforkk-redis-starter</artifactId>
-    <version>2.0.0</version>
+    <version>2.0.1</version>
 </dependency>
 ```
 
 ### 2. 全局开关配置 (可选)
 
-在 `application.yml` 中，组件默认处于开启状态。紧急情况下可一键降级：
+组件引入后默认激活。如果在生产环境中遇到紧急故障，你可以通过修改 `application.yml` 一键关闭所有拦截与缓存切面：
 
-YAML
-
-```yaml
+```YAML
 cyforkk:
   redis:
-    enabled: true  # 设为 false 即可彻底休眠组件所有切面
+    enabled: true  # 设为 false 即可彻底休眠组件
 ```
 
 ------
 
-## 🛠️ 使用指南 (Usage Guide)
+## 业务场景使用指南
 
-### 1. 分布式缓存 (Cache-Aside)
+### 场景一：查询与修改数据 (分布式缓存)
 
-使用 `@RedisCache` 自动处理缓存命中与回源，使用 `@RedisEvict` 清理缓存。**全面支持 SpEL 表达式与动态 `#result` 返回值感知**。
+**业务痛点**：自己手写 Redis 的 `get` 和 `set` 代码繁琐，且容易出现并发一致性问题。
+
+**解决方案**：使用 `@RedisCache` 和 `@RedisEvict`。
 
 ```Java
 @Service
-public class UserService {
+public class ShopService {
 
-    // 读缓存：缓存未命中时自动查询 DB，并由 DCL 机制防止并发击穿
-    @RedisCache(keyPrefix = "user:info:", key = "#id", expireTime = 3600)
-    public UserDTO getUser(Long id) {
-        return userMapper.selectById(id);
+    // 【查数据】：如果 Redis 有，直接返回；如果没有，查数据库并自动放入 Redis。
+    // 过期时间设为 10 分钟。自带防击穿保护。
+    @RedisCache(keyPrefix = "shop:detail:", key = "#id", expireTime = 600)
+    public ShopDTO getShopDetail(Long id) {
+        return databaseMapper.selectById(id);
     }
 
-    // 写缓存：支持事务！将在数据库事务 Commit 成功后再清理缓存，绝对防止脏读
+    // 【改数据】：开启事务。数据库更新成功后，自动清理对应的 Redis 缓存。
     @Transactional
-    @RedisEvict(keyPrefix = "user:info:", key = "#result.id")
-    public UserDTO saveUser(UserDTO dto) {
-        userMapper.insert(dto); // 假设返回自增 ID
-        return dto; 
+    @RedisEvict(keyPrefix = "shop:detail:", key = "#shop.id")
+    public void updateShop(ShopDTO shop) {
+        databaseMapper.update(shop); 
     }
 }
 ```
 
-### 2. 接口幂等性与防抖 (Idempotent)
+### 场景二：防止表单重复提交 (接口幂等与防抖)
 
-保护核心接口免受用户表单连点、网络重试及恶意脚本的重放攻击。
+**业务痛点**：用户点击“支付”按钮时网络卡了，连点了三下，导致扣了三次钱。
+
+**解决方案**：使用 `@Idempotent`。
 
 ```Java
 @RestController
 public class OrderController {
 
-    // 锁定同一用户 5 秒内只能提交一次订单。业务执行异常时自动安全解锁！
-    @Idempotent(keyPrefix = "order:submit:", key = "#req.userId", expireTime = 5, message = "请勿重复提交订单")
+    // 锁定规则：同一个 userId，在 5 秒内绝对不允许执行第二次。
+    // 拦截后会自动抛出异常，前端会收到 429 状态码和 message 提示。
+    @Idempotent(keyPrefix = "order:submit:", key = "#req.userId", expireTime = 5, message = "订单处理中，请勿重复点击")
     @PostMapping("/submit")
-    public Result<String> submitOrder(@RequestBody OrderReq req) {
-        orderService.doSubmit(req);
+    public Result submitOrder(@RequestBody OrderReq req) {
+        orderService.createOrder(req);
         return Result.success("下单成功");
     }
 }
 ```
 
-### 3. 多维路由限流 (Rate Limit)
+### 场景三：防止接口被恶意刷量 (多维限流)
 
-支持基于 IP 或动态 SpEL 业务标识的精准限流。底层采用 `Class:Method:IP/SpEL:Time` 构建绝对物理隔离的命名空间，杜绝路由击穿。
+**业务痛点**：竞争对手写了脚本，疯狂调用我们的“发送短信验证码”接口，导致短信费用爆炸。
+
+**解决方案**：使用 `@RateLimit` 组合策略。
 
 ```Java
 @RestController
-public class ActivityController {
+public class SmsController {
 
-    // 多级防刷漏斗：同一用户，1秒内最多点赞 5 次（防爆破），1天内最多点赞 100 次（防爬虫）
+    // 组合防御网：
+    // 第一层：同一个手机号，60 秒内只能发 1 次（防恶意刷某一个号）。
+    // 第二层：同一个网络 IP，10 秒内最多请求 5 次（防机器批量刷多个号）。
     @RateLimits({
-        @RateLimit(type = LimitType.CUSTOM, key = "#userId", time = 1, maxCount = 5, message = "操作太快啦，请稍后再试"),
-        @RateLimit(type = LimitType.CUSTOM, key = "#userId", time = 86400, maxCount = 100, message = "今日点赞次数已达上限")
+        @RateLimit(type = LimitType.CUSTOM, key = "#phone", time = 60, maxCount = 1, message = "验证码发送频繁，请 1 分钟后再试"),
+        @RateLimit(type = LimitType.IP, time = 10, maxCount = 5, message = "当前网络请求异常，请稍后再试")
     })
-    @GetMapping("/like")
-    public Result<Void> like(Long userId) {
-        return Result.success();
+    @GetMapping("/sendSms")
+    public Result sendSms(@RequestParam String phone) {
+        smsService.send(phone);
+        return Result.success("发送成功");
     }
-    
-    // 全局 IP 限流：同一个真实客户端 IP，10秒内最多调用 3 次
-    @RateLimit(type = LimitType.IP, time = 10, maxCount = 3)
-    @GetMapping("/public/data")
-    public Result<Data> getPublicData() { ... }
 }
 ```
 
 ------
 
-## 🏗️ 架构拓扑流转 (Architecture Flow)
+## 架构集成契约 (异常处理推荐)
 
-组件底层的 AOP 流量清洗模型采用了极严密的优先级（Order）编排，确保以最小的代价拦截脏流量：
+本组件在触发防抖或限流时，会抛出 `IdempotentException` 或 `RateLimitException`。组件内部已经提供了保底的错误响应机制。
+
+为了让报错信息（JSON 格式）完全符合你所在公司的规范，**强烈建议**在你的业务系统中，配置全局异常处理器接管这些异常：
+
+```Java
+@RestControllerAdvice
+@Order(Ordered.HIGHEST_PRECEDENCE) // 声明最高控制权，确保覆盖组件的兜底逻辑
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(IdempotentException.class)
+    public Result handleIdempotent(IdempotentException e) {
+        // 返回贵公司统一的 Result 格式
+        return Result.fail(e.getMessage()); 
+    }
+
+    @ExceptionHandler(RateLimitException.class)
+    public Result handleRateLimit(RateLimitException e) {
+        return Result.fail(e.getMessage()); 
+    }
+}
+```
+
+------
+
+## AOP 架构防卫纵深拓扑
+
+组件底层的 AOP 流量清洗模型采用了严格的优先级（Order）编排，确保异常流量在最外围被拦截，而容错机制能完美包裹住缓存机制：
 
 ```mermaid
 flowchart TD
-    Req(["🌍 客户端请求"]) --> RL
-    RL("Order: 1 <br/> 多维漏斗限流") -->|"超限"| BLOCK1(("HTTP 429"))
-    RL -->|"放行"| IDEM("Order: 2 <br/> 分布式防抖幂等")
-    IDEM -->|"重放"| BLOCK2(("HTTP 409"))
-    IDEM -->|"放行"| CACHE("Order: 10 <br/> DCL 并发缓存控制")
-    CACHE -->|"Cache Miss"| BIZ("目标业务方法")
-    BIZ -->|"Commit 成功"| EVICT("AfterReturning <br/> 延迟安全缓存清理")
+    Req(["客户端 / 前端请求"]) --> RL
+    
+    RL("第 1 防线: 多维限流 (Order: 10)") -->|"流量超载"| BLOCK1(("阻断: HTTP 429"))
+    RL -->|"流量正常"| IDEM("第 2 防线: 幂等防抖 (Order: 20)")
+    
+    IDEM -->|"重复点击"| BLOCK2(("阻断: HTTP 429"))
+    IDEM -->|"合法操作"| FAULT("第 3 防线: 容错兜底 (Order: 30)")
+    
+    FAULT -->|"包裹并监控监控"| CACHE("第 4 防线: 缓存控制 (Order: 40)")
+    
+    CACHE -->|"Cache Miss (缓存未命中)"| BIZ("目标业务核心逻辑 / 数据库")
+    CACHE -.->|"若 Redis 物理宕机"| FAULT
+    FAULT -.->|"接管异常并柔性降级"| BIZ
+    
+    BIZ -->|"事务 Commit 成功"| EVICT("安全清理过期缓存")
 ```
 
-## 📜 License
+## License
 
 MIT License. Copyright (c) 2026 cyforkk.
+
