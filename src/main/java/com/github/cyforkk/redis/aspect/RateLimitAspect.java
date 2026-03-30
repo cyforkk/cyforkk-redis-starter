@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
  */
 @Aspect
 @Slf4j
-@Order(10) // 设置为最高优先级的业务切面，确保限流永远先于缓存和核心逻辑执行
+@Order(1) // 设置为最高优先级的业务切面，确保限流永远先于缓存和核心逻辑执行
 public class RateLimitAspect {
     private final RedisService redisService;
     private final SpelUtil spelUtil;

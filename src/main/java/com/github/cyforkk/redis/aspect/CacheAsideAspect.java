@@ -42,7 +42,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @Version 3.0 (Ultimate DCL & Fail-Open Refactored)
  */
 @Aspect
-@Order(40) // 【架构约束】：必须在限流、熔断切面之后执行，严禁为被拦截的非法流量提供缓存服务
+@Order(10) // 【架构约束】：必须在限流、熔断切面之后执行，严禁为被拦截的非法流量提供缓存服务
 @Slf4j
 public class CacheAsideAspect {
 

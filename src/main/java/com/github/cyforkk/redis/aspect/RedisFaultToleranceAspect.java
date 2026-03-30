@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.LongAdder;
 @Aspect
 // 【架构排兵布阵】：设置为全局最高优先级。
 // 必须确保本切面包裹在 @RateLimit 和 @RedisCache 的最内层，作为直面底层物理连接的最后一道壁垒。
-@Order(30)
+@Order(Ordered.HIGHEST_PRECEDENCE)
 @Slf4j
 public class RedisFaultToleranceAspect {
 

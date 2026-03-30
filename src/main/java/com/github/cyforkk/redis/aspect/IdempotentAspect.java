@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 @Aspect
 @Slf4j
 // 【架构排兵布阵】：限流挡掉机器恶意刷量(@Order(1)) -> 防抖挡掉正常用户的重复提交(@Order(2)) -> 最后才允许访问缓存与数据库(@Order(10))
-@Order(20)
+@Order(2)
 public class IdempotentAspect {
 
     private final RedisService redisService;
