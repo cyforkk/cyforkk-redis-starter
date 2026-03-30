@@ -40,5 +40,8 @@ public @interface Idempotent {
     /**
      * 4. 【报错提示】：触发防抖拦截时的友好提示文案
      */
-    String message() default "请勿重复提交，正在处理中...";
+    /**
+     * 防抖阻断后的提示文案
+     */
+    String message() default "操作过于频繁，请勿重复提交";
 }

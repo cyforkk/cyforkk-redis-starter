@@ -115,8 +115,10 @@ public class RateLimitAspect {
                 if (currentCount != null && currentCount > rateLimit.maxCount()) {
                     // 触发拦截，由于已经按照时间排过序，
                     // 此时抛出异常，最大程度保护了后续的长周期（大容量）令牌桶不被恶意请求污染！
-                    log.warn("触发多维限流防线！拦截键: {}, 阈值: {}次/{}秒",
-                            redisKey, rateLimit.maxCount(), rateLimit.time());
+                    // 【第三道防线：保姆级日志提示】
+                    // 不仅打印拦截信息，更提供明确的行动指南 (Actionable Message)
+                    // 【修改点】：同样删掉“👉开发提示”
+                    log.info("[Cyforkk-Redis] 触发底层限流规则: {}", redisKey);
                     throw new RateLimitException(rateLimit.message());
                 }
             } catch (Exception e) {

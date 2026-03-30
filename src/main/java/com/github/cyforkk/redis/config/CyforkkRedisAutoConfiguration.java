@@ -100,4 +100,11 @@ public class CyforkkRedisAutoConfiguration {
     public IdempotentAspect cyforkkIdempotentAspect(RedisService cyforkkRedisService, SpelUtil cyforkkSpelUtil) {
         return new IdempotentAspect(cyforkkRedisService, cyforkkSpelUtil);
     }
+
+    // 在你的 CyforkkRedisAutoConfiguration 类里，加上这个 Bean
+    @Bean
+    @ConditionalOnMissingBean
+    public CyforkkFallbackExceptionHandler cyforkkFallbackExceptionHandler() {
+        return new CyforkkFallbackExceptionHandler();
+    }
 }

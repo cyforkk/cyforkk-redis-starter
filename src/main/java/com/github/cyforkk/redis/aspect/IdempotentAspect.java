@@ -100,7 +100,8 @@ public class IdempotentAspect {
         if (isFirstRequest != null && !isFirstRequest) {
             // 返回 false，证明该业务标识在指定的 Time Window 内已被前序线程抢占。
             // 判定为重复提交，抛出专属异常中断执行链路，全局异常处理器应将其捕获并响应友好的 HTTP 提示。
-            log.warn("触发接口防抖拦截！判定为重复/重放请求，拦截键: {}", redisKey);
+            // 【修改点】：不再打印“👉开发提示”，只做最基础的底层动作记录（或者改为 log.debug）
+            log.info("[Cyforkk-Redis] 拦截到重复防抖请求: {}", redisKey);
             throw new IdempotentException(idempotent.message());
         }
 

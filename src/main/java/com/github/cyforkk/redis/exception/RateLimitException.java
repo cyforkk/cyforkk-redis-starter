@@ -1,5 +1,8 @@
 package com.github.cyforkk.redis.exception;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ResponseStatus;
+
 /**
  * 核心高可用控制异常：分布式限流阻断专属异常 (Distributed Rate Limit Blocking Exception)
  * <p>
@@ -24,6 +27,7 @@ package com.github.cyforkk.redis.exception;
  * @Create 2026/3/25 下午9:22
  * @Version 1.0
  */
+@ResponseStatus(code = HttpStatus.TOO_MANY_REQUESTS)
 public class RateLimitException extends RuntimeException {
 
     /**
