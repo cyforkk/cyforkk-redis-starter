@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
 import com.github.cyforkk.redis.aspect.*;
+import com.github.cyforkk.redis.core.CyforkkIdGenerator;
 import com.github.cyforkk.redis.service.RedisService;
 import com.github.cyforkk.redis.util.SpelUtil;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -12,6 +13,7 @@ import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -19,6 +21,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 @ConditionalOnClass(StringRedisTemplate.class)
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 @ConditionalOnProperty(prefix = "cyforkk.redis", name = "enabled", havingValue = "true", matchIfMissing = true)
+// 【核心修复】：告诉 Spring，把这个属性类实例化成 Bean 并注入到容器中！
+@EnableConfigurationProperties(CyforkkRedisProperties.class)
 public class CyforkkRedisAutoConfiguration {
 
     // ========================================================
@@ -106,5 +110,18 @@ public class CyforkkRedisAutoConfiguration {
     @ConditionalOnMissingBean
     public CyforkkFallbackExceptionHandler cyforkkFallbackExceptionHandler() {
         return new CyforkkFallbackExceptionHandler();
+    }
+
+    // ========================================================
+    // Phase 5: 基础组件 (Infra Tools)
+    // ========================================================
+    @Bean
+    @ConditionalOnMissingBean
+    // 注入配置类 CyforkkRedisProperties
+    public CyforkkIdGenerator cyforkkIdGenerator(StringRedisTemplate stringRedisTemplate,
+                                                 CyforkkRedisProperties properties) {
+        // 从配置中动态读取起点时间戳！
+        long epochStart = properties.getIdGenerator().getEpochStart();
+        return new CyforkkIdGenerator(stringRedisTemplate, epochStart);
     }
 }
