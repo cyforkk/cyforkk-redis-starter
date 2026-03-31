@@ -13,6 +13,7 @@
 - **强一致性保障**：在修改数据时，组件会自动感知 Spring 的数据库事务。只有当数据库真正提交成功后，才会去删除旧缓存，彻底杜绝“脏数据”。
 - **防抖与接口幂等**：用户因为网络卡顿疯狂点击“提交”按钮时，组件能在极短时间内精准识别并拦截多余的请求，防止生成重复的订单。
 - **多维漏斗限流**：你可以组合配置限流规则。比如：针对单个接口，同一个 IP 10 秒内最多访问 3 次，同时同一个手机号 1 天内最多发送 10 次验证码。
+- **高性能全局唯一 ID 生成**：基于 Redis INCR 和 31 位时间戳位运算，提供单机压测破万 QPS 的 64 位纯数字发号器，完美契合 MySQL BIGINT，彻底解决 UUID 无序页分裂和雪花算法时钟回拨问题。
 - **开箱即用的开发者体验**：自带默认的全局异常兜底处理器，拦截恶意请求后直接返回规范的 HTTP 429 提示，避免页面出现难看的 500 报错堆栈。
 
 ------
@@ -27,19 +28,23 @@
 <dependency>
     <groupId>com.github.cyforkk</groupId>
     <artifactId>cyforkk-redis-starter</artifactId>
-    <version>2.0.1</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
-### 2. 全局开关配置 (可选)
+### 2. 全局开关与发号器配置 (可选)
 
-组件引入后默认激活。如果在生产环境中遇到紧急故障，你可以通过修改 `application.yml` 一键关闭所有拦截与缓存切面：
+组件引入后默认激活。你可以通过修改 `application.yml` 进行动态配置：
 
 ```YAML
 cyforkk:
   redis:
-    enabled: true  # 设为 false 即可彻底休眠组件
+    enabled: true  # 设为 false 即可彻底休眠组件所有切面
+    id-generator:
+      epoch-start: 1704067200 # 分布式发号器纪元起点（秒级时间戳）。强烈建议修改为您项目上线的年份，以最大化时间戳容量
 ```
+
+> **最佳实践**：不知道怎么计算业务上线时间的时间戳？请直接在你的代码中调用并打印 `CyforkkRedisProperties.IdGenerator.getEpochSecondByString("2026-01-01 00:00:00")`，将获取到的纯数字复制填入上述 YAML 即可。
 
 ------
 
@@ -117,6 +122,30 @@ public class SmsController {
 }
 ```
 
+### 场景四：生成全局唯一 ID (分布式发号器)
+
+**业务痛点**：UUID 导致数据库插入慢，雪花算法依赖机器时钟容易发生时钟回拨导致 ID 重复。
+
+**解决方案**：直接注入使用 `CyforkkIdGenerator`。
+
+```Java
+@Service
+public class OrderService {
+
+    @Autowired
+    private CyforkkIdGenerator idGenerator;
+
+    public void createOrder(OrderReq req) {
+        // 极速获取 64 位纯数字高性能 ID，对 DB 极其友好
+        long orderId = idGenerator.nextId("order"); 
+        
+        Order order = new Order();
+        order.setId(orderId); 
+        databaseMapper.insert(order); 
+    }
+}
+```
+
 ------
 
 ## 架构集成契约 (异常处理推荐)
@@ -149,6 +178,8 @@ public class GlobalExceptionHandler {
 
 组件底层的 AOP 流量清洗模型采用了严格的优先级（Order）编排，确保异常流量在最外围被拦截，而容错机制能完美包裹住缓存机制：
 
+代码段
+
 ```mermaid
 flowchart TD
     Req(["客户端 / 前端请求"]) --> RL
@@ -171,4 +202,3 @@ flowchart TD
 ## License
 
 MIT License. Copyright (c) 2026 cyforkk.
-
