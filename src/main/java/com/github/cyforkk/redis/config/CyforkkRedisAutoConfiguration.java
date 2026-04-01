@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
 import com.github.cyforkk.redis.aspect.*;
 import com.github.cyforkk.redis.core.CyforkkIdGenerator;
+import com.github.cyforkk.redis.core.CyforkkLockClient;
 import com.github.cyforkk.redis.service.RedisService;
 import com.github.cyforkk.redis.util.SpelUtil;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -123,5 +124,12 @@ public class CyforkkRedisAutoConfiguration {
         // 从配置中动态读取起点时间戳！
         long epochStart = properties.getIdGenerator().getEpochStart();
         return new CyforkkIdGenerator(stringRedisTemplate, epochStart);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    // 【新增】：将锁工厂注册为 Spring Bean
+    public CyforkkLockClient cyforkkLockClient(StringRedisTemplate stringRedisTemplate) {
+        return new CyforkkLockClient(stringRedisTemplate);
     }
 }
