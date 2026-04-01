@@ -6,10 +6,13 @@ import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.cyforkk.redis.annotation.NoFallback;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import com.fasterxml.jackson.core.type.TypeReference;
+
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -45,6 +48,30 @@ public class RedisService {
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
             Long.class
     );
+
+    // 1. 静态加载 Lua 脚本，作为基础设施常驻内存
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
+    /**
+     * 工业级纯内存秒杀预扣减
+     *
+     * @param stockKey 扣减库存的 Redis Key
+     * @param orderKey 记录购买用户的 Redis Set Key
+     * @param userId   当前抢购的用户 ID
+     * @return 0: 抢购成功; 1: 库存不足; 2: 重复购买
+     */
+    public Long executeSeckillDeduction(String stockKey, String orderKey, String userId) {
+        return stringRedisTemplate.execute(
+                SECKILL_SCRIPT,
+                Arrays.asList(stockKey, orderKey),
+                userId
+        );
+    }
     /**
      * 架构级构造器注入
      * 由外部的 {@code CyforkkRedisAutoConfiguration} 在 SPI 装配时动态推入实例。
